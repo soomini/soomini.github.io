@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         네이버 예약 빈자리 감시·선점
 // @namespace    https://soomini.github.io/
-// @version      1.3.2
+// @version      1.4.0
 // @description  네이버 예약 상품 페이지를 주기적으로 새로고침하여 빈 시간이 생기면 자동으로 선택하고, 좌석 선택 화면에서 빈 좌석까지 고른 뒤 알림을 보냅니다.
 // @match        https://booking.naver.com/booking/*/bizes/*/items/*
 // @match        https://m.booking.naver.com/booking/*/bizes/*/items/*
@@ -102,10 +102,62 @@
     return cfg.preferredOnly && prefs.length ? null : available[0];
   }
 
-  function findNextButton() {
-    return [...document.querySelectorAll('button, a[role="button"], a')]
-      .filter((el) => !panel.contains(el))
-      .find((el) => /^(다음|다음단계|다음 단계|예약하기|좌석 ?선택하기|좌석선택|예매하기|선택완료|선택 완료)$/.test(textOf(el)) && !isDisabled(el));
+  // 실제 사용자 클릭처럼 포인터·마우스 이벤트를 순서대로 발생시킵니다.
+  function realClick(el) {
+    const opts = { bubbles: true, cancelable: true, view: window, button: 0 };
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
+      const Ctor = type.startsWith('pointer') && window.PointerEvent ? PointerEvent : MouseEvent;
+      el.dispatchEvent(new Ctor(type, opts));
+    }
+    el.click();
+  }
+
+  // 문구가 일치하는 진행 버튼을 찾습니다. button 태그가 아닌 div·span 버튼도 포함하고,
+  // 활성 여부는 버튼 자신의 상태만으로 판단합니다(상위 요소의 클래스는 보지 않음).
+  function findActionButton(re) {
+    const matches = [...document.querySelectorAll('button, a, [role="button"], div, span, p')]
+      .filter((el) => !panel.contains(el) && re.test(textOf(el)));
+    // 같은 문구를 가진 요소가 중첩된 경우 가장 안쪽 요소를 기준으로 합니다.
+    const leaves = matches.filter((el) => !matches.some((o) => o !== el && el.contains(o)));
+    const found = leaves.map((leaf) => {
+      const el = leaf.closest('button, a, [role="button"]') ||
+        leaf.closest('[class*="btn" i], [class*="button" i]') || leaf;
+      // 문구 요소부터 버튼 요소까지 사이에 비활성 표시가 있는지 확인합니다.
+      let disabled = false;
+      for (let n = leaf; n; n = n.parentElement) {
+        if (n.disabled === true || n.getAttribute('aria-disabled') === 'true' ||
+          /disabled|dimmed/i.test(n.getAttribute('class') || '') ||
+          getComputedStyle(n).pointerEvents === 'none') disabled = true;
+        if (n === el) break;
+      }
+      return { el, disabled };
+    });
+    return found.find((b) => !b.disabled) || found[0] || null;
+  }
+
+  const NEXT_RE = /^(다음|다음단계|다음 단계|예약하기|좌석 ?선택하기|좌석선택|예매하기|선택완료|선택 완료)$/;
+  const APPLY_RE = /^(적용|선택 ?완료|좌석 ?선택 ?완료|다음|예매하기)$/;
+
+  // 버튼이 활성화될 때까지 기다렸다가 누릅니다. 끝까지 비활성으로 보여도 마지막에 한 번 눌러 봅니다.
+  async function clickWhenReady(re, label, timeoutMs = 10000) {
+    const start = Date.now();
+    let b = null;
+    while (Date.now() - start < timeoutMs) {
+      b = findActionButton(re);
+      if (b && !b.disabled) {
+        realClick(b.el);
+        log(`"${textOf(b.el)}" 클릭`);
+        return true;
+      }
+      await sleep(200);
+    }
+    if (b) {
+      realClick(b.el);
+      log(`"${textOf(b.el)}"이(가) 비활성으로 보였지만 클릭을 시도했습니다. [${b.el.tagName.toLowerCase()} class="${b.el.getAttribute('class') || ''}"]`);
+      return true;
+    }
+    log(`${label} 버튼을 찾지 못했습니다. 직접 누르십시오.`);
+    return false;
   }
 
   // ---------------------------------------------------------------------------
@@ -133,12 +185,6 @@
       });
   }
 
-  function findApplyButton() {
-    return [...document.querySelectorAll('button, a[role="button"], a')]
-      .filter((el) => !panel.contains(el))
-      .find((el) => /^(적용|선택 ?완료|좌석 ?선택 ?완료|다음|예매하기)$/.test(textOf(el)) && !isDisabled(el));
-  }
-
   async function seatPhase() {
     GM_setValue('seatPhaseUntil', 0);
     log('좌석 화면 대기 중…');
@@ -154,19 +200,9 @@
       return false;
     }
     seat.el.scrollIntoView({ block: 'center' });
-    seat.el.click();
+    realClick(seat.el);
     log('빈 좌석 클릭');
-    for (let i = 0; i < 20; i++) {
-      await sleep(250);
-      const apply = findApplyButton();
-      if (apply) {
-        apply.click();
-        log(`"${textOf(apply)}" 클릭`);
-        return true;
-      }
-    }
-    log("'적용' 버튼을 찾지 못했습니다. 직접 누르십시오.");
-    return false;
+    return clickWhenReady(APPLY_RE, "'적용'");
   }
 
   // 페이지(SPA)가 시간 목록을 렌더링할 때까지 기다립니다.
@@ -370,8 +406,9 @@
     const pick = pickSlot(slots);
     log(`감지 ${slots.length}개 (가능 ${slots.filter((s) => s.available).length}개)` +
       (pick ? `, 선택 예정: ${pick.time}` : ', 선택 대상 없음'));
-    const next = findNextButton();
-    log(next ? `진행 버튼 감지: "${textOf(next)}"` : "진행 버튼('좌석 선택하기' 등) 미감지(시간 선택 후 나타날 수 있음)");
+    const next = findActionButton(NEXT_RE);
+    log(next ? `진행 버튼 감지: "${textOf(next.el)}" (${next.disabled ? '현재 비활성' : '활성'}) [${next.el.tagName.toLowerCase()} class="${next.el.getAttribute('class') || ''}"]`
+      : "진행 버튼('좌석 선택하기' 등) 미감지");
     const seats = collectSeats();
     if (seats.length) {
       seats.forEach((s) => { s.el.style.outline = s.available ? '2px solid #03c75a' : '1px dashed #e33'; });
@@ -417,23 +454,16 @@
       save('enabled', false);
       renderState();
       pick.el.scrollIntoView({ block: 'center' });
-      pick.el.click();
+      realClick(pick.el);
       log(`빈자리 발견: ${pick.time} 선택`);
 
       let seatResult = null;
       if (cfg.autoNext) {
-        for (let i = 0; i < 20; i++) {
-          await sleep(250);
-          const next = findNextButton();
-          if (next) {
-            // 좌석 화면이 새 페이지로 열려도 이어서 처리하도록 표시해 둡니다.
-            if (cfg.autoSeat) GM_setValue('seatPhaseUntil', Date.now() + 30000);
-            next.click();
-            log(`"${textOf(next)}" 클릭`);
-            if (cfg.autoSeat) seatResult = await seatPhase();
-            break;
-          }
-        }
+        // 좌석 화면이 새 페이지로 열려도 이어서 처리하도록 표시해 둡니다.
+        if (cfg.autoSeat) GM_setValue('seatPhaseUntil', Date.now() + 40000);
+        const clicked = await clickWhenReady(NEXT_RE, "'좌석 선택하기'");
+        if (clicked && cfg.autoSeat) seatResult = await seatPhase();
+        else GM_setValue('seatPhaseUntil', 0);
       }
       alertUser(seatResult ? `${pick.time} 빈 좌석을 선택했습니다. 즉시 결제를 완료하십시오.`
         : `${pick.time} 빈자리를 선택했습니다. 즉시 예약을 완료하십시오.`);
