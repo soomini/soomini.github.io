@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         네이버 예약 빈자리 감시·선점
 // @namespace    https://soomini.github.io/
-// @version      1.5.0
+// @version      1.6.0
 // @description  네이버 예약 상품 페이지를 주기적으로 새로고침하여 빈 시간이 생기면 자동으로 선택하고, 좌석 선택 화면에서 빈 좌석까지 고른 뒤 알림을 보냅니다.
 // @match        https://booking.naver.com/booking/*/bizes/*/items/*
 // @match        https://m.booking.naver.com/booking/*/bizes/*/items/*
@@ -224,9 +224,14 @@
   }
 
   // 페이지(SPA)가 시간 목록을 렌더링할 때까지 기다립니다.
+  // 네이버의 과다 접속 차단·보안문자 화면 문구
+  const BLOCK_RE = /과도한 ?(서비스 ?)?(이용|요청|접근|접속)|비정상적인 ?(접근|요청|이용)|자동입력 ?방지|일시적으로 (이용|접근|접속)이? ?제한|Too Many Requests/i;
+  const isBlocked = () => BLOCK_RE.test(document.body.innerText.replace(panel.innerText, ''));
+
   async function waitForRender() {
     const start = Date.now();
     while (Date.now() - start < RENDER_TIMEOUT_MS) {
+      if (isBlocked()) return 'blocked';
       if (collectSlots().length) return true;
       if (/예약 가능한 (시간|날짜)이 없|선택 가능한 시간이 없/.test(document.body.innerText)) return true;
       await sleep(500);
@@ -454,6 +459,17 @@
     }
 
     const rendered = await waitForRender();
+    if (rendered === 'blocked') {
+      // 차단 화면이면 쉬는 시간을 5분 → 10분 → 20분 → 30분으로 늘려 가며 기다렸다가 다시 시도합니다.
+      const blocks = GM_getValue('blockCount', 0) + 1;
+      GM_setValue('blockCount', blocks);
+      const pauseMin = Math.min(30, 5 * 2 ** (blocks - 1));
+      log(`접속 제한 화면 감지(${blocks}회째). ${pauseMin}분 쉬고 다시 시도합니다. 간격을 늘리는 것을 권합니다.`);
+      pushRemote(`네이버 접속 제한 화면이 떴습니다(${blocks}회째). ${pauseMin}분 뒤 자동으로 다시 시도합니다.`);
+      reloadTimer = setTimeout(() => location.reload(), pauseMin * 60000);
+      return;
+    }
+    if (rendered) GM_setValue('blockCount', 0);
     if (!rendered) {
       log('시간 목록을 찾지 못했습니다. 감지 테스트로 확인하거나 선택자를 지정하십시오.');
       // 로그아웃·접속 제한·보안문자 등으로 감시가 헛돌고 있을 가능성을 한 번 알립니다.
