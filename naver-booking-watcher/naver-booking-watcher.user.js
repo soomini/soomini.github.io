@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         네이버 예약 빈자리 감시·선점
 // @namespace    https://soomini.github.io/
-// @version      1.7.1
+// @version      1.8.0
 // @description  네이버 예약 상품 페이지를 주기적으로 새로고침하여 빈 시간이 생기면 자동으로 선택하고, 좌석 선택 화면에서 빈 좌석까지 고른 뒤 알림을 보냅니다.
 // @match        https://booking.naver.com/booking/*/bizes/*/items/*
 // @match        https://m.booking.naver.com/booking/*/bizes/*/items/*
@@ -11,6 +11,7 @@
 // @grant        GM_setValue
 // @grant        GM_notification
 // @grant        GM_xmlhttpRequest
+// @grant        GM_info
 // @connect      ntfy.sh
 // @connect      api.telegram.org
 // @run-at       document-idle
@@ -343,6 +344,7 @@
       <button id="nbw-toggle" style="flex:1"></button>
       <button id="nbw-test">감지 테스트</button>
     </div>
+    <div id="nbw-health" style="margin-top:6px;padding:4px 6px;border-radius:4px;background:#f1f8f4"></div>
     <div id="nbw-log" style="margin-top:6px;max-height:110px;overflow:auto;color:#555"></div>`;
   // 네이버 페이지의 CSS 초기화로 입력칸·체크박스가 보이지 않는 문제를 막습니다.
   const style = document.createElement('style');
@@ -492,6 +494,44 @@
     pushRemote(`네이버 접속 제한(${blocks}회째). ${pauseMin}분 뒤 ${cfg.intervalSec}초 간격으로 자동 재개합니다.`);
     reloadTimer = setTimeout(back, pauseMin * 60000);
   }
+
+  // ---------------------------------------------------------------------------
+  // 중복 실행 점검: 같은 페이지의 스크립트 중복, 같은 감시를 하는 탭 중복
+  // ---------------------------------------------------------------------------
+  let tabId;
+  try {
+    tabId = sessionStorage.getItem('nbwTabId') || Math.random().toString(36).slice(2, 8);
+    sessionStorage.setItem('nbwTabId', tabId);
+  } catch (e) { tabId = Math.random().toString(36).slice(2, 8); }
+
+  function checkHealth() {
+    const now = Date.now();
+    const beats = GM_getValue('beats', {});
+    if (running() && !isErrorPage) beats[tabId] = now;
+    // 마지막 새로고침 간격의 3배 + 1분 안에 기록이 있는 탭만 살아 있는 것으로 봅니다.
+    const ttl = (Math.max(MIN_INTERVAL, cfg.intervalSec) * 3 + 60) * 1000;
+    for (const [id, t] of Object.entries(beats)) if (now - t > ttl) delete beats[id];
+    GM_setValue('beats', beats);
+
+    const panels = document.querySelectorAll('#nbw-panel').length;
+    const tabs = Object.keys(beats).length;
+    const problems = [];
+    if (panels > 1) problems.push(`이 페이지에 스크립트가 ${panels}개 실행 중입니다. Tampermonkey에서 하나만 남기십시오.`);
+    if (tabs > 1) problems.push(`감시 중인 탭이 ${tabs}개입니다. 하나만 남기고 닫으십시오.`);
+    const box = $('nbw-health');
+    if (problems.length) {
+      box.style.background = '#fdecec';
+      box.style.color = '#c62828';
+      box.textContent = '⚠ ' + problems.join(' ');
+    } else {
+      box.style.background = '#f1f8f4';
+      box.style.color = '#1b7f3b';
+      box.textContent = `✔ 중복 없음 (스크립트 1개 · 감시 탭 ${running() && !isErrorPage ? 1 : 0}개 · v${GM_info.script.version} · 탭 ${tabId})`;
+    }
+  }
+  checkHealth();
+  // 다른 버전의 스크립트가 늦게 실행되는 경우도 잡도록 잠시 뒤 한 번 더 확인합니다.
+  setTimeout(checkHealth, 3000);
 
   async function run() {
     if (isErrorPage) {
