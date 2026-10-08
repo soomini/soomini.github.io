@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>네이버 예약 빈자리 감시</title>
+<style>
+  :root { --bg:#fff; --fg:#222; --muted:#666; --accent:#03c75a; --box:#f5f7f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151716; --fg:#e8e8e8; --muted:#aaa; --box:#222624; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.7 -apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:32px 16px; }
+  h1 { font-size:1.6rem; } h2 { font-size:1.15rem; margin-top:2rem; }
+  .btn { display:inline-block; background:var(--accent); color:#fff; padding:10px 18px; border-radius:8px; text-decoration:none; font-weight:bold; }
+  .note { background:var(--box); padding:12px 16px; border-radius:8px; color:var(--muted); font-size:.92rem; }
+  code { background:var(--box); padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>네이버 예약 빈자리 감시·선점</h1>
+  <p>네이버 예약 상품 페이지를 주기적으로 새로고침하다가 빈 시간이 생기면 자동으로 선택하고 <b>'다음'</b> 단계까지 진입한 뒤 소리·데스크톱 알림으로 알려 주는 브라우저 userscript입니다.</p>
+
+  <h2>1. 설치</h2>
+  <ol>
+    <li>브라우저에 <a href="https://www.tampermonkey.net/">Tampermonkey</a> 확장을 설치합니다.</li>
+    <li>아래 버튼을 눌러 스크립트를 설치합니다.</li>
+  </ol>
+  <p><a class="btn" href="naver-booking-watcher.user.js">스크립트 설치</a></p>
+
+  <h2>2. 사용</h2>
+  <ol>
+    <li>네이버에 로그인합니다.</li>
+    <li>감시할 상품·날짜 페이지를 엽니다. 예: <code>booking.naver.com/booking/12/bizes/1747885/items/8099172?startDateTime=2026-10-30…</code></li>
+    <li>우측 하단 패널에서 <b>감지 테스트</b>를 누릅니다. 초록 실선은 예약 가능, 빨간 점선은 불가로 인식된 시간입니다. 인식이 맞는지 먼저 확인하십시오.</li>
+    <li>선호 시간(예: <code>10:00, 14:30</code>), 새로고침 간격, 종료 시각을 지정하고 <b>이 페이지 감시 시작</b>을 누릅니다.</li>
+    <li>빈자리가 생기면 자동 선택 → '다음' 클릭 → 알림이 울리고 감시는 정지합니다. 이후 예약자 정보·동의·결제는 직접 완료합니다.</li>
+  </ol>
+
+  <h2>3. 주의 사항</h2>
+  <div class="note">
+    <ul>
+      <li>탭이 열려 있고 컴퓨터가 깨어 있어야 동작합니다. 백그라운드 탭은 브라우저가 타이머를 늦출 수 있으므로 별도 창으로 띄워 두는 편이 안정적입니다.</li>
+      <li>'다음' 단계 진입만으로 네이버가 자리를 확보해 주지는 않을 수 있습니다. 최종 '예약 신청'을 누르기 전까지는 다른 사용자와 경쟁 상태입니다.</li>
+      <li>새로고침 간격은 최소 10초로 제한됩니다. 과도하게 짧은 간격은 계정·IP 제한이나 이용약관 위반 소지가 있습니다.</li>
+      <li>네이버 화면 구조가 바뀌면 자동 감지가 실패할 수 있습니다. 이때는 패널의 <b>고급: 시간 버튼 선택자</b>에 CSS 선택자를 직접 입력하십시오.</li>
+    </ul>
+  </div>
+</main>
+</body>
+</html>
