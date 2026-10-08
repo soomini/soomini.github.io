@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         네이버 예약 빈자리 감시·선점
 // @namespace    https://soomini.github.io/
-// @version      1.3.0
+// @version      1.3.1
 // @description  네이버 예약 상품 페이지를 주기적으로 새로고침하여 빈 시간이 생기면 자동으로 선택하고, 좌석 선택 화면에서 빈 좌석까지 고른 뒤 알림을 보냅니다.
 // @match        https://booking.naver.com/booking/*/bizes/*/items/*
 // @match        https://m.booking.naver.com/booking/*/bizes/*/items/*
@@ -207,11 +207,12 @@
   }
 
   async function findTelegramChatId() {
-    const r = await request({ method: 'GET', url: `https://api.telegram.org/bot${cfg.tgToken.trim()}/getUpdates` });
+    // 이전의 빈 응답이 브라우저 캐시에서 재사용되지 않도록 매번 새로 조회합니다.
+    const r = await request({ method: 'GET', nocache: true, url: `https://api.telegram.org/bot${cfg.tgToken.trim()}/getUpdates?t=${Date.now()}` });
     const updates = JSON.parse(r.responseText).result || [];
-    const last = updates.reverse().find((u) => u.message && u.message.chat);
-    if (!last) throw new Error('봇에게 먼저 아무 메시지나 보내십시오');
-    save('tgChatId', String(last.message.chat.id));
+    const last = updates.reverse().map((u) => u.message || u.edited_message || u.my_chat_member).find((m) => m && m.chat);
+    if (!last) throw new Error(`봇에게 먼저 아무 메시지나 보내십시오 (수신 기록 ${updates.length}건)`);
+    save('tgChatId', String(last.chat.id));
     return cfg.tgChatId;
   }
 
