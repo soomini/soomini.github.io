@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         네이버 예약 빈자리 감시·선점
 // @namespace    https://soomini.github.io/
-// @version      1.7.0
+// @version      1.7.1
 // @description  네이버 예약 상품 페이지를 주기적으로 새로고침하여 빈 시간이 생기면 자동으로 선택하고, 좌석 선택 화면에서 빈 좌석까지 고른 뒤 알림을 보냅니다.
 // @match        https://booking.naver.com/booking/*/bizes/*/items/*
 // @match        https://m.booking.naver.com/booking/*/bizes/*/items/*
@@ -48,7 +48,7 @@
 
   // 감시 대상 URL을 고정하여, 다른 상품 페이지에서 오작동하지 않도록 합니다.
   const pageKey = location.pathname + location.search;
-  const targetKey = GM_getValue('targetKey', '');
+  let targetKey = GM_getValue('targetKey', '');
 
   // ---------------------------------------------------------------------------
   // 유틸
@@ -407,7 +407,7 @@
   function renderState() {
     $('nbw-state').textContent = running() ? '● 실행 중' : '○ 정지';
     $('nbw-state').style.color = running() ? '#03c75a' : '#999';
-    $('nbw-toggle').textContent = running() ? '정지' : '이 페이지 감시 시작';
+    $('nbw-toggle').textContent = running() ? '정지' : isErrorPage ? '차단 풀리면 자동 재개' : '이 페이지 감시 시작';
   }
   renderState();
 
@@ -418,7 +418,23 @@
       clearTimeout(reloadTimer);
       log('정지했습니다.');
     } else if (isErrorPage) {
-      log('오류 화면에서는 시작할 수 없습니다. 예약 페이지에서 시작하십시오.');
+      // 오류 주소의 url 파라미터(이중 인코딩)에서 원래 예약 페이지 주소를 꺼냅니다.
+      let origin;
+      try {
+        const raw = new URLSearchParams(location.search).get('url') || '';
+        origin = new URL(decodeURIComponent(raw));
+      } catch (e) { origin = null; }
+      if (origin && /(^|\.)booking\.naver\.com$/.test(origin.hostname) && /\/items\//.test(origin.pathname)) {
+        targetKey = origin.pathname + origin.search;
+        GM_setValue('targetKey', targetKey);
+        save('enabled', true);
+        backoff();
+      } else if (targetKey) {
+        save('enabled', true);
+        backoff();
+      } else {
+        log('원래 예약 페이지를 알 수 없습니다. 예약 페이지에서 시작하십시오.');
+      }
     } else {
       GM_setValue('pauseUntil', 0);
       GM_setValue('targetKey', pageKey);
