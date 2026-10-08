@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         네이버 예약 빈자리 감시·선점
 // @namespace    https://soomini.github.io/
-// @version      1.2.0
+// @version      1.3.0
 // @description  네이버 예약 상품 페이지를 주기적으로 새로고침하여 빈 시간이 생기면 자동으로 선택하고, 좌석 선택 화면에서 빈 좌석까지 고른 뒤 알림을 보냅니다.
 // @match        https://booking.naver.com/booking/*/bizes/*/items/*
 // @match        https://m.booking.naver.com/booking/*/bizes/*/items/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_notification
+// @grant        GM_xmlhttpRequest
+// @connect      ntfy.sh
+// @connect      api.telegram.org
 // @run-at       document-idle
 // @downloadURL  https://soomini.github.io/naver-booking-watcher/naver-booking-watcher.user.js
 // @updateURL    https://soomini.github.io/naver-booking-watcher/naver-booking-watcher.user.js
@@ -28,6 +31,9 @@
     slotSelector: '',        // 자동 감지가 맞지 않을 때 직접 지정하는 시간 버튼 CSS 선택자
     autoSeat: true,          // 좌석 선택 화면에서 빈 좌석 자동 선택 후 '적용' 클릭
     seatSelector: '',        // 자동 감지가 맞지 않을 때 직접 지정하는 '빈 좌석' CSS 선택자
+    ntfyTopic: '',           // 휴대폰 알림: ntfy 주제 이름
+    tgToken: '',             // 휴대폰 알림: 텔레그램 봇 토큰
+    tgChatId: '',            // 휴대폰 알림: 텔레그램 채팅 ID(비우면 알림 테스트 시 자동 조회)
     stopAt: '',              // 감시 종료 시각(예: "2026-10-29T23:59"). 비우면 무제한
   };
   const MIN_INTERVAL = 5;
@@ -189,7 +195,57 @@
     } catch (e) { /* 자동재생 정책으로 차단될 수 있음 */ }
   }
 
+  // 휴대폰 알림. 네이버 페이지의 보안 정책(CSP)을 피하기 위해 GM_xmlhttpRequest를 사용합니다.
+  function request(opts) {
+    return new Promise((resolve, reject) => GM_xmlhttpRequest({
+      ...opts,
+      onload: (r) => (r.status >= 200 && r.status < 300 ? resolve(r) : reject(new Error('HTTP ' + r.status))),
+      onerror: () => reject(new Error('네트워크 오류')),
+      ontimeout: () => reject(new Error('시간 초과')),
+      timeout: 10000,
+    }));
+  }
+
+  async function findTelegramChatId() {
+    const r = await request({ method: 'GET', url: `https://api.telegram.org/bot${cfg.tgToken.trim()}/getUpdates` });
+    const updates = JSON.parse(r.responseText).result || [];
+    const last = updates.reverse().find((u) => u.message && u.message.chat);
+    if (!last) throw new Error('봇에게 먼저 아무 메시지나 보내십시오');
+    save('tgChatId', String(last.message.chat.id));
+    return cfg.tgChatId;
+  }
+
+  async function pushRemote(msg) {
+    const text = msg + '\n' + location.href;
+    const jobs = [];
+    if (cfg.ntfyTopic.trim()) {
+      jobs.push(request({
+        method: 'POST',
+        url: 'https://ntfy.sh/',
+        headers: { 'Content-Type': 'application/json' },
+        data: JSON.stringify({ topic: cfg.ntfyTopic.trim(), title: '네이버 예약 빈자리', message: text, priority: 5, tags: ['rotating_light'] }),
+      }).then(() => 'ntfy'));
+    }
+    if (cfg.tgToken.trim()) {
+      jobs.push((async () => {
+        const chatId = cfg.tgChatId.trim() || await findTelegramChatId();
+        await request({
+          method: 'POST',
+          url: `https://api.telegram.org/bot${cfg.tgToken.trim()}/sendMessage`,
+          headers: { 'Content-Type': 'application/json' },
+          data: JSON.stringify({ chat_id: chatId, text: '🚨 ' + text }),
+        });
+        return '텔레그램';
+      })());
+    }
+    if (!jobs.length) return;
+    for (const r of await Promise.allSettled(jobs)) {
+      log(r.status === 'fulfilled' ? `${r.value} 알림 전송 완료` : `휴대폰 알림 실패: ${r.reason.message}`);
+    }
+  }
+
   function alertUser(msg) {
+    pushRemote(msg);
     GM_notification({ title: '네이버 예약 빈자리', text: msg, timeout: 0, onclick: () => window.focus() });
     beep();
     let on = false;
@@ -215,6 +271,11 @@
     <details><summary>고급: 선택자 직접 지정</summary>
       시간 버튼 <input id="nbw-selector" placeholder="비우면 자동 감지" style="width:100%">
       빈 좌석 <input id="nbw-seatselector" placeholder="비우면 자동 감지" style="width:100%"></details>
+    <details><summary>휴대폰 알림</summary>
+      ntfy 주제 <input id="nbw-ntfy" placeholder="예: soomin-nfesta-7351" style="width:100%">
+      텔레그램 봇 토큰 <input id="nbw-tgtoken" placeholder="123456:ABC..." style="width:100%">
+      텔레그램 채팅 ID <input id="nbw-tgchat" placeholder="비우면 자동 조회" style="width:100%">
+      <button id="nbw-pushtest" style="margin-top:4px">알림 테스트</button></details>
     <div style="margin-top:6px;display:flex;gap:6px">
       <button id="nbw-toggle" style="flex:1"></button>
       <button id="nbw-test">감지 테스트</button>
@@ -250,6 +311,21 @@
   $('nbw-seatselector').value = cfg.seatSelector;
   $('nbw-autoseat').onchange = (e) => save('autoSeat', e.target.checked);
   $('nbw-seatselector').onchange = (e) => save('seatSelector', e.target.value);
+  $('nbw-ntfy').value = cfg.ntfyTopic;
+  $('nbw-tgtoken').value = cfg.tgToken;
+  $('nbw-tgchat').value = cfg.tgChatId;
+  $('nbw-ntfy').onchange = (e) => save('ntfyTopic', e.target.value.trim());
+  $('nbw-tgtoken').onchange = (e) => { save('tgToken', e.target.value.trim()); save('tgChatId', ''); $('nbw-tgchat').value = ''; };
+  $('nbw-tgchat').onchange = (e) => save('tgChatId', e.target.value.trim());
+  $('nbw-pushtest').onclick = async () => {
+    // 입력 직후 바로 누른 경우에도 값이 반영되도록 다시 저장합니다.
+    save('ntfyTopic', $('nbw-ntfy').value.trim());
+    save('tgToken', $('nbw-tgtoken').value.trim());
+    save('tgChatId', $('nbw-tgchat').value.trim());
+    if (!cfg.ntfyTopic && !cfg.tgToken) return log('ntfy 주제나 텔레그램 봇 토큰을 먼저 입력하십시오.');
+    await pushRemote('알림 테스트입니다.');
+    $('nbw-tgchat').value = cfg.tgChatId;
+  };
   $('nbw-interval').onchange = (e) => {
     const v = Math.max(MIN_INTERVAL, Number(e.target.value) || DEFAULTS.intervalSec);
     e.target.value = v;
@@ -322,7 +398,15 @@
     }
 
     const rendered = await waitForRender();
-    if (!rendered) log('시간 목록을 찾지 못했습니다. 감지 테스트로 확인하거나 선택자를 지정하십시오.');
+    if (!rendered) {
+      log('시간 목록을 찾지 못했습니다. 감지 테스트로 확인하거나 선택자를 지정하십시오.');
+      // 로그아웃·접속 제한·보안문자 등으로 감시가 헛돌고 있을 가능성을 한 번 알립니다.
+      const fails = GM_getValue('renderFails', 0) + 1;
+      GM_setValue('renderFails', fails);
+      if (fails === 3) pushRemote('3회 연속 예약 화면을 읽지 못했습니다. 로그인·접속 제한 여부를 확인하십시오.');
+    } else {
+      GM_setValue('renderFails', 0);
+    }
 
     const slots = collectSlots();
     const pick = pickSlot(slots);
