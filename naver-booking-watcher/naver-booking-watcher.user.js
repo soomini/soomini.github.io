@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         네이버 예약 빈자리 감시·선점
 // @namespace    https://soomini.github.io/
-// @version      1.4.0
+// @version      1.5.0
 // @description  네이버 예약 상품 페이지를 주기적으로 새로고침하여 빈 시간이 생기면 자동으로 선택하고, 좌석 선택 화면에서 빈 좌석까지 고른 뒤 알림을 보냅니다.
 // @match        https://booking.naver.com/booking/*/bizes/*/items/*
 // @match        https://m.booking.naver.com/booking/*/bizes/*/items/*
@@ -114,9 +114,19 @@
 
   // 문구가 일치하는 진행 버튼을 찾습니다. button 태그가 아닌 div·span 버튼도 포함하고,
   // 활성 여부는 버튼 자신의 상태만으로 판단합니다(상위 요소의 클래스는 보지 않음).
-  function findActionButton(re) {
-    const matches = [...document.querySelectorAll('button, a, [role="button"], div, span, p')]
-      .filter((el) => !panel.contains(el) && re.test(textOf(el)));
+  // labels는 우선순위 순서입니다. 앞 순위 문구가 화면에 있으면 뒤 순위 문구는 보지 않습니다.
+  function findActionButton(labels) {
+    const all = [...document.querySelectorAll('button, a, [role="button"], div, span, p')]
+      .filter((el) => !panel.contains(el));
+    for (const re of labels) {
+      const b = findByLabel(all, re);
+      if (b) return b;
+    }
+    return null;
+  }
+
+  function findByLabel(all, re) {
+    const matches = all.filter((el) => re.test(textOf(el)));
     // 같은 문구를 가진 요소가 중첩된 경우 가장 안쪽 요소를 기준으로 합니다.
     const leaves = matches.filter((el) => !matches.some((o) => o !== el && el.contains(o)));
     const found = leaves.map((leaf) => {
@@ -135,15 +145,17 @@
     return found.find((b) => !b.disabled) || found[0] || null;
   }
 
-  const NEXT_RE = /^(다음|다음단계|다음 단계|예약하기|좌석 ?선택하기|좌석선택|예매하기|선택완료|선택 완료)$/;
-  const APPLY_RE = /^(적용|선택 ?완료|좌석 ?선택 ?완료|다음|예매하기)$/;
+  // '예매하기'는 페이지 상단 탭 이름과 같아 오작동하므로 넣지 않습니다.
+  const NEXT_LABELS = [/^좌석 ?선택하기$/, /^다음 ?(단계)?$/, /^선택 ?완료$/];
+  const APPLY_LABELS = [/^적용$/, /^좌석 ?선택 ?완료$/, /^선택 ?완료$/];
+  const isSeatPage = () => /\/seats\//.test(location.pathname);
 
   // 버튼이 활성화될 때까지 기다렸다가 누릅니다. 끝까지 비활성으로 보여도 마지막에 한 번 눌러 봅니다.
-  async function clickWhenReady(re, label, timeoutMs = 10000) {
+  async function clickWhenReady(labels, label, timeoutMs = 10000) {
     const start = Date.now();
     let b = null;
     while (Date.now() - start < timeoutMs) {
-      b = findActionButton(re);
+      b = findActionButton(labels);
       if (b && !b.disabled) {
         realClick(b.el);
         log(`"${textOf(b.el)}" 클릭`);
@@ -188,6 +200,12 @@
   async function seatPhase() {
     GM_setValue('seatPhaseUntil', 0);
     log('좌석 화면 대기 중…');
+    // 좌석 화면(주소에 /seats/ 포함)으로 넘어간 뒤에만 좌석을 찾습니다.
+    for (let i = 0; i < 50 && !isSeatPage(); i++) await sleep(200);
+    if (!isSeatPage()) {
+      log('좌석 화면으로 넘어가지 않았습니다. 직접 진행하십시오.');
+      return false;
+    }
     let seats = [];
     for (let i = 0; i < 30; i++) {
       await sleep(500);
@@ -202,7 +220,7 @@
     seat.el.scrollIntoView({ block: 'center' });
     realClick(seat.el);
     log('빈 좌석 클릭');
-    return clickWhenReady(APPLY_RE, "'적용'");
+    return clickWhenReady(APPLY_LABELS, "'적용'");
   }
 
   // 페이지(SPA)가 시간 목록을 렌더링할 때까지 기다립니다.
@@ -406,7 +424,7 @@
     const pick = pickSlot(slots);
     log(`감지 ${slots.length}개 (가능 ${slots.filter((s) => s.available).length}개)` +
       (pick ? `, 선택 예정: ${pick.time}` : ', 선택 대상 없음'));
-    const next = findActionButton(NEXT_RE);
+    const next = findActionButton(isSeatPage() ? APPLY_LABELS : NEXT_LABELS);
     log(next ? `진행 버튼 감지: "${textOf(next.el)}" (${next.disabled ? '현재 비활성' : '활성'}) [${next.el.tagName.toLowerCase()} class="${next.el.getAttribute('class') || ''}"]`
       : "진행 버튼('좌석 선택하기' 등) 미감지");
     const seats = collectSeats();
@@ -461,7 +479,7 @@
       if (cfg.autoNext) {
         // 좌석 화면이 새 페이지로 열려도 이어서 처리하도록 표시해 둡니다.
         if (cfg.autoSeat) GM_setValue('seatPhaseUntil', Date.now() + 40000);
-        const clicked = await clickWhenReady(NEXT_RE, "'좌석 선택하기'");
+        const clicked = await clickWhenReady(NEXT_LABELS, "'좌석 선택하기'");
         if (clicked && cfg.autoSeat) seatResult = await seatPhase();
         else GM_setValue('seatPhaseUntil', 0);
       }
