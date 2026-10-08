@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         네이버 예약 빈자리 감시·선점
 // @namespace    https://soomini.github.io/
-// @version      1.0.0
+// @version      1.1.0
 // @description  네이버 예약 상품 페이지를 주기적으로 새로고침하여 빈 시간이 생기면 자동으로 선택하고 '다음' 단계로 진입한 뒤 알림을 보냅니다.
 // @match        https://booking.naver.com/booking/*/bizes/*/items/*
 // @match        https://m.booking.naver.com/booking/*/bizes/*/items/*
@@ -96,7 +96,7 @@
   function findNextButton() {
     return [...document.querySelectorAll('button, a[role="button"], a')]
       .filter((el) => !panel.contains(el))
-      .find((el) => /^(다음|다음단계|다음 단계|예약하기|선택완료|선택 완료)$/.test(textOf(el)) && !isDisabled(el));
+      .find((el) => /^(다음|다음단계|다음 단계|예약하기|좌석 ?선택하기|좌석선택|예매하기|선택완료|선택 완료)$/.test(textOf(el)) && !isDisabled(el));
   }
 
   // 페이지(SPA)가 시간 목록을 렌더링할 때까지 기다립니다.
@@ -154,6 +154,16 @@
       <button id="nbw-test">감지 테스트</button>
     </div>
     <div id="nbw-log" style="margin-top:6px;max-height:110px;overflow:auto;color:#555"></div>`;
+  // 네이버 페이지의 CSS 초기화로 입력칸·체크박스가 보이지 않는 문제를 막습니다.
+  const style = document.createElement('style');
+  style.textContent = `
+    #nbw-panel input, #nbw-panel button { all: revert; font: 12px sans-serif; }
+    #nbw-panel input:not([type=checkbox]) { border: 1px solid #bbb; border-radius: 4px; padding: 2px 4px; margin: 2px 0; background: #fff; color: #222; }
+    #nbw-panel input[type=checkbox] { appearance: auto; width: 14px; height: 14px; vertical-align: middle; margin: 0 4px 0 0; }
+    #nbw-panel button { border: 1px solid #03c75a; border-radius: 6px; padding: 5px 8px; background: #fff; color: #03c75a; cursor: pointer; }
+    #nbw-panel #nbw-toggle { background: #03c75a; color: #fff; font-weight: bold; }`;
+  document.head.appendChild(style);
+  panel.id = 'nbw-panel';
   document.body.appendChild(panel);
 
   const $ = (id) => panel.querySelector('#' + id);
