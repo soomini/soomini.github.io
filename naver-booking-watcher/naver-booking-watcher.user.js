@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         네이버 예약 빈자리 감시·선점
 // @namespace    https://soomini.github.io/
-// @version      1.6.0
+// @version      1.7.0
 // @description  네이버 예약 상품 페이지를 주기적으로 새로고침하여 빈 시간이 생기면 자동으로 선택하고, 좌석 선택 화면에서 빈 좌석까지 고른 뒤 알림을 보냅니다.
 // @match        https://booking.naver.com/booking/*/bizes/*/items/*
 // @match        https://m.booking.naver.com/booking/*/bizes/*/items/*
+// @match        https://booking.naver.com/error/*
+// @match        https://m.booking.naver.com/error/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_notification
@@ -226,7 +228,8 @@
   // 페이지(SPA)가 시간 목록을 렌더링할 때까지 기다립니다.
   // 네이버의 과다 접속 차단·보안문자 화면 문구
   const BLOCK_RE = /과도한 ?(서비스 ?)?(이용|요청|접근|접속)|비정상적인 ?(접근|요청|이용)|자동입력 ?방지|일시적으로 (이용|접근|접속)이? ?제한|Too Many Requests/i;
-  const isBlocked = () => BLOCK_RE.test(document.body.innerText.replace(panel.innerText, ''));
+  const rawText = (el) => el.innerText || el.textContent || '';
+  const isBlocked = () => BLOCK_RE.test(rawText(document.body).replace(rawText(panel), ''));
 
   async function waitForRender() {
     const start = Date.now();
@@ -398,7 +401,9 @@
   $('nbw-stopat').onchange = (e) => save('stopAt', e.target.value);
   $('nbw-selector').onchange = (e) => save('slotSelector', e.target.value);
 
-  const running = () => cfg.enabled && targetKey === pageKey;
+  // 네이버는 과다 접속 시 /error/too-many-requests 주소로 이동시킵니다.
+  const isErrorPage = /^\/error\//.test(location.pathname);
+  const running = () => cfg.enabled && (targetKey === pageKey || isErrorPage);
   function renderState() {
     $('nbw-state').textContent = running() ? '● 실행 중' : '○ 정지';
     $('nbw-state').style.color = running() ? '#03c75a' : '#999';
@@ -412,7 +417,10 @@
       save('enabled', false);
       clearTimeout(reloadTimer);
       log('정지했습니다.');
+    } else if (isErrorPage) {
+      log('오류 화면에서는 시작할 수 없습니다. 예약 페이지에서 시작하십시오.');
     } else {
+      GM_setValue('pauseUntil', 0);
       GM_setValue('targetKey', pageKey);
       save('enabled', true);
       // 알림 권한·오디오 재생 권한을 사용자 클릭 시점에 미리 확보합니다.
@@ -442,7 +450,38 @@
   // ---------------------------------------------------------------------------
   // 감시 루프 (페이지 로드마다 1회 검사 후 새로고침 예약)
   // ---------------------------------------------------------------------------
+  // 차단되면 5분 → 10분 → 20분 → 30분으로 늘려 가며 쉬고, 새로고침 간격도 늘린 뒤 예약 페이지로 돌아갑니다.
+  function backoff() {
+    const back = () => {
+      if (isErrorPage) location.href = location.origin + (targetKey || '/');
+      else location.reload();
+    };
+    // 대기 중에 이 화면을 다시 연 경우에는 횟수를 늘리지 않고 남은 시간만 기다립니다.
+    const remaining = GM_getValue('pauseUntil', 0) - Date.now();
+    if (remaining > 0) {
+      log(`접속 제한 대기 중. ${Math.ceil(remaining / 60000)}분 뒤 예약 페이지로 돌아갑니다.`);
+      reloadTimer = setTimeout(back, remaining);
+      return;
+    }
+    const blocks = GM_getValue('blockCount', 0) + 1;
+    GM_setValue('blockCount', blocks);
+    const pauseMin = Math.min(30, 5 * 2 ** (blocks - 1));
+    GM_setValue('pauseUntil', Date.now() + pauseMin * 60000);
+    const newInterval = Math.min(60, Math.max(20, Math.round(cfg.intervalSec * 1.5)));
+    if (newInterval > cfg.intervalSec) {
+      save('intervalSec', newInterval);
+      $('nbw-interval').value = newInterval;
+    }
+    log(`접속 제한 감지(${blocks}회째). ${pauseMin}분 쉬고, 새로고침 간격을 ${cfg.intervalSec}초로 늘려 다시 시도합니다.`);
+    pushRemote(`네이버 접속 제한(${blocks}회째). ${pauseMin}분 뒤 ${cfg.intervalSec}초 간격으로 자동 재개합니다.`);
+    reloadTimer = setTimeout(back, pauseMin * 60000);
+  }
+
   async function run() {
+    if (isErrorPage) {
+      if (cfg.enabled && /too-many-requests/.test(location.pathname)) backoff();
+      return;
+    }
     // 좌석 화면이 새 페이지로 열린 경우 이어서 좌석을 선택합니다.
     if (GM_getValue('seatPhaseUntil', 0) > Date.now()) {
       const ok = await seatPhase();
@@ -460,13 +499,7 @@
 
     const rendered = await waitForRender();
     if (rendered === 'blocked') {
-      // 차단 화면이면 쉬는 시간을 5분 → 10분 → 20분 → 30분으로 늘려 가며 기다렸다가 다시 시도합니다.
-      const blocks = GM_getValue('blockCount', 0) + 1;
-      GM_setValue('blockCount', blocks);
-      const pauseMin = Math.min(30, 5 * 2 ** (blocks - 1));
-      log(`접속 제한 화면 감지(${blocks}회째). ${pauseMin}분 쉬고 다시 시도합니다. 간격을 늘리는 것을 권합니다.`);
-      pushRemote(`네이버 접속 제한 화면이 떴습니다(${blocks}회째). ${pauseMin}분 뒤 자동으로 다시 시도합니다.`);
-      reloadTimer = setTimeout(() => location.reload(), pauseMin * 60000);
+      backoff();
       return;
     }
     if (rendered) GM_setValue('blockCount', 0);
