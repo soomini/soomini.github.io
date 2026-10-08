@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         네이버 예약 빈자리 감시·선점
 // @namespace    https://soomini.github.io/
-// @version      1.3.1
+// @version      1.3.2
 // @description  네이버 예약 상품 페이지를 주기적으로 새로고침하여 빈 시간이 생기면 자동으로 선택하고, 좌석 선택 화면에서 빈 좌석까지 고른 뒤 알림을 보냅니다.
 // @match        https://booking.naver.com/booking/*/bizes/*/items/*
 // @match        https://m.booking.naver.com/booking/*/bizes/*/items/*
@@ -27,7 +27,7 @@
     intervalSec: 30,         // 새로고침 간격(초). 최소 5초
     preferredTimes: '',      // 선호 시간(쉼표 구분, 예: "10:00, 14:30"). 비우면 아무 시간이나
     preferredOnly: false,    // true면 선호 시간 외에는 선택하지 않음
-    autoNext: true,          // 시간 선택 후 '다음' 버튼까지 자동 클릭
+    autoNext: true,          // 시간 선택 후 '좌석 선택하기'(또는 '다음') 버튼까지 자동 클릭
     slotSelector: '',        // 자동 감지가 맞지 않을 때 직접 지정하는 시간 버튼 CSS 선택자
     autoSeat: true,          // 좌석 선택 화면에서 빈 좌석 자동 선택 후 '적용' 클릭
     seatSelector: '',        // 자동 감지가 맞지 않을 때 직접 지정하는 '빈 좌석' CSS 선택자
@@ -266,7 +266,7 @@
     <label>새로고침 간격(초) <input id="nbw-interval" type="number" min="${MIN_INTERVAL}" style="width:60px"></label><br>
     <label>선호 시간 <input id="nbw-prefs" placeholder="예: 10:00, 14:30" style="width:150px"></label><br>
     <label><input id="nbw-prefonly" type="checkbox"> 선호 시간만 선택</label><br>
-    <label><input id="nbw-autonext" type="checkbox"> '다음' 버튼까지 자동 진행</label><br>
+    <label><input id="nbw-autonext" type="checkbox"> '좌석 선택하기' 버튼까지 자동 진행</label><br>
     <label>종료 시각 <input id="nbw-stopat" type="datetime-local" style="width:170px"></label><br>
     <label><input id="nbw-autoseat" type="checkbox"> 빈 좌석 자동 선택 후 '적용'</label><br>
     <details><summary>고급: 선택자 직접 지정</summary>
@@ -371,7 +371,7 @@
     log(`감지 ${slots.length}개 (가능 ${slots.filter((s) => s.available).length}개)` +
       (pick ? `, 선택 예정: ${pick.time}` : ', 선택 대상 없음'));
     const next = findNextButton();
-    log(next ? `'다음' 버튼 감지: "${textOf(next)}"` : "'다음' 버튼 미감지(시간 선택 후 나타날 수 있음)");
+    log(next ? `진행 버튼 감지: "${textOf(next)}"` : "진행 버튼('좌석 선택하기' 등) 미감지(시간 선택 후 나타날 수 있음)");
     const seats = collectSeats();
     if (seats.length) {
       seats.forEach((s) => { s.el.style.outline = s.available ? '2px solid #03c75a' : '1px dashed #e33'; });
